@@ -1,125 +1,455 @@
 import 'package:flutter/material.dart';
+import 'package:logger/logger.dart';
+
+var loggerWithStack = Logger(
+  printer: PrettyPrinter(),
+);
+
+var logger = Logger(
+  printer: PrettyPrinter(methodCount: 0),
+);
 
 void main() {
-  runApp(const MyApp());
+  runApp(const NestedRouterDemo());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class Book {
+  final String title;
+  final String author;
 
-  // This widget is the root of your application.
+  Book(this.title, this.author);
+}
+
+class NestedRouterDemo extends StatefulWidget {
+  const NestedRouterDemo({super.key});
+
+  @override
+  State<NestedRouterDemo> createState() => _NestedRouterDemoState();
+}
+
+class _NestedRouterDemoState extends State<NestedRouterDemo> {
+  final BookRouterDelegate _routerDelegate = BookRouterDelegate();
+  final BookRouteInformationParser _routeInformationParser =
+      BookRouteInformationParser();
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a blue toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+    /// we use the new MaterialApp.router constructor and pass in our custom
+    /// implementations
+    return MaterialApp.router(
+      title: 'Books App',
+      routerDelegate: _routerDelegate,
+      routeInformationParser: _routeInformationParser,
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
+/// Application state
+class BooksAppState extends ChangeNotifier {
+  int _selectedIndex;
 
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
+  Book? _selectedBook;
 
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
+  final List<Book> books = [
+    Book('Stranger in a Strange Land', 'Robert A. Heinlein'),
+    Book('Foundation', 'Isaac Asimov'),
+    Book('Fahrenheit 451', 'Ray Bradbury'),
+  ];
 
-  final String title;
+  BooksAppState() : _selectedIndex = 0;
 
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  int get selectedIndex => _selectedIndex;
+
+  set selectedIndex(int idx) {
+    _selectedIndex = idx;
+    if (_selectedIndex == 1) {
+      // Remove this line if you want to keep the selected book when navigating
+      // between "settings" and "home" which book was selected when Settings is
+      // tapped.
+      selectedBook = null;
+    }
+    notifyListeners();
+  }
+
+  Book? get selectedBook => _selectedBook;
+
+  set selectedBook(Book? book) {
+    _selectedBook = book;
+    notifyListeners();
+  }
+
+  int getSelectedBookById() {
+    if (_selectedBook == null) return 0;
+    if (!books.contains(_selectedBook)) return 0;
+    return books.indexOf(_selectedBook!);
+  }
+
+  void setSelectedBookById(int id) {
+    if (id < 0 || id > books.length - 1) {
+      return;
+    }
+
+    _selectedBook = books[id];
+    notifyListeners();
+  }
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+/// Step 1
+/// When the platform emits a new route (for example, “books/2”) ,
+/// the RouteInformationParser converts it into an abstract data
+/// type T that you define in your app (for example,
+/// a class called BooksRoutePath).
+class BookRouteInformationParser extends RouteInformationParser<BookRoutePath> {
+  @override
+  Future<BookRoutePath> parseRouteInformation(
+      RouteInformation routeInformation) async {
+    final uri = routeInformation.uri;
+    logger.d("uri:$uri");
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+    if (uri.pathSegments.isNotEmpty && uri.pathSegments.first == 'settings') {
+      return BooksSettingsPath();
+    } else {
+      if (uri.pathSegments.length >= 2) {
+        if (uri.pathSegments[0] == 'book') {
+          return BooksDetailsPath(int.tryParse(uri.pathSegments[1]) ?? 0);
+        }
+      }
+      return BooksListPath();
+    }
+  }
+
+  @override
+  RouteInformation? restoreRouteInformation(BookRoutePath configuration) {
+    logger.d("restore route information");
+    if (configuration is BooksListPath) {
+      return RouteInformation(uri: Uri.parse('/home'));
+    }
+    if (configuration is BooksSettingsPath) {
+      return RouteInformation(uri: Uri.parse('/settings'));
+    }
+    if (configuration is BooksDetailsPath) {
+      return RouteInformation(uri: Uri.parse('/book/${configuration.id}'));
+    }
+    return null;
+  }
+}
+
+class BookRouterDelegate extends RouterDelegate<BookRoutePath>
+    with ChangeNotifier, PopNavigatorRouterDelegateMixin<BookRoutePath> {
+  @override
+  final GlobalKey<NavigatorState> navigatorKey;
+
+  /// Step 3
+  /// When notifyListeners is called, it tells the Router to rebuild the
+  /// RouterDelegate (using its build() method)
+  BooksAppState appState = BooksAppState();
+
+  BookRouterDelegate() : navigatorKey = GlobalKey<NavigatorState>() {
+    appState.addListener(notifyListeners);
+  }
+
+  @override
+  BookRoutePath get currentConfiguration {
+    if (appState.selectedIndex == 1) {
+      return BooksSettingsPath();
+    } else {
+      if (appState.selectedBook == null) {
+        return BooksListPath();
+      } else {
+        return BooksDetailsPath(appState.getSelectedBookById());
+      }
+    }
+  }
+
+  /// Step 4
+  /// RouterDelegate.build() returns a new Navigator, whose pages now reflect
+  /// the change to the app state (for example, the selectedBookId)
+  @override
+  Widget build(BuildContext context) {
+    logger.d("rebuild navigator");
+    return Navigator(
+      key: navigatorKey,
+      pages: [
+        MaterialPage(
+          child: AppShell(appState: appState),
+        ),
+      ],
+      onPopPage: (route, result) {
+        if (!route.didPop(result)) {
+          return false;
+        }
+
+        if (appState.selectedBook != null) {
+          appState.selectedBook = null;
+        }
+        notifyListeners();
+        return true;
+      },
+    );
+  }
+
+  /// Step 2
+  /// RouterDelegate’s setNewRoutePath method is called with this data type,
+  /// and must update the application state to reflect the change (for example,
+  /// by setting the selectedBookId) and call notifyListeners.
+  ///
+  /// When a new route has been pushed to the application, Router calls
+  /// setNewRoutePath, which gives our app the opportunity to update the app
+  /// state based on the changes to the route
+  @override
+  Future<void> setNewRoutePath(BookRoutePath configuration) async {
+    logger.d("set new router path");
+    if (configuration is BooksListPath) {
+      appState.selectedIndex = 0;
+      appState.selectedBook = null;
+    } else if (configuration is BooksSettingsPath) {
+      appState.selectedIndex = 1;
+    } else if (configuration is BooksDetailsPath) {
+      appState.setSelectedBookById(configuration.id);
+    }
+  }
+}
+
+// Routes
+abstract class BookRoutePath {}
+
+class BooksListPath extends BookRoutePath {}
+
+class BooksSettingsPath extends BookRoutePath {}
+
+class BooksDetailsPath extends BookRoutePath {
+  final int id;
+
+  BooksDetailsPath(this.id);
+}
+
+// Widget that contains the AdaptiveNavigationScaffold
+class AppShell extends StatefulWidget {
+  final BooksAppState appState;
+
+  const AppShell({
+    super.key,
+    required this.appState,
+  });
+
+  @override
+  State<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends State<AppShell> {
+  late InnerRouterDelegate _routerDelegate;
+  late ChildBackButtonDispatcher _backButtonDispatcher;
+
+  @override
+  void initState() {
+    super.initState();
+    _routerDelegate = InnerRouterDelegate(widget.appState);
+  }
+
+  @override
+  void didUpdateWidget(covariant AppShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _routerDelegate.appState = widget.appState;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Defer back button dispatching to the child router
+    _backButtonDispatcher = Router.of(context)
+        .backButtonDispatcher!
+        .createChildBackButtonDispatcher();
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    var appState = widget.appState;
+
+    // Claim priority, If there are parallel sub router, you will need
+    // to pick which one should take priority;
+    _backButtonDispatcher.takePriority();
+
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+      appBar: AppBar(),
+      body: Router(
+        routerDelegate: _routerDelegate,
+        backButtonDispatcher: _backButtonDispatcher,
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
+      bottomNavigationBar: BottomNavigationBar(
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.settings), label: 'Settings'),
+        ],
+        currentIndex: appState.selectedIndex,
+        onTap: (newIndex) {
+          appState.selectedIndex = newIndex;
+        },
+      ),
+    );
+  }
+}
+
+// Nested router
+class InnerRouterDelegate extends RouterDelegate<BookRoutePath>
+    with ChangeNotifier, PopNavigatorRouterDelegateMixin<BookRoutePath> {
+  @override
+  final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+  BooksAppState get appState => _appState;
+  BooksAppState _appState;
+
+  set appState(BooksAppState value) {
+    if (value == _appState) {
+      return;
+    }
+    _appState = value;
+    notifyListeners();
+  }
+
+  InnerRouterDelegate(this._appState);
+
+  @override
+  Widget build(BuildContext context) {
+    /// The onPopPage callback now uses notifyListeners instead of setState,
+    /// since this class is now a ChangeNotifier, not a widget. When the
+    /// RouterDelegate notifies its listeners, the Router widget is likewise
+    /// notified that the RouterDelegate's currentConfiguration has changed and
+    /// that its build method needs to be called again to build a new Navigator
+    return Navigator(
+      key: navigatorKey,
+      pages: [
+        if (appState.selectedIndex == 0) ...[
+          FadeAnimationPage(
+            child: BooksListScreen(
+              books: appState.books,
+              onTapped: _handleBookTapped,
+            ),
+            key: const ValueKey('BooksListPage'),
+          ),
+          if (appState.selectedBook != null)
+            MaterialPage(
+              key: ValueKey(appState.selectedBook),
+              child: BookDetailsScreen(book: appState.selectedBook),
+            ),
+        ] else
+          const FadeAnimationPage(
+            child: SettingsScreen(),
+            key: ValueKey('SettingsPage'),
+          ),
+      ],
+      onPopPage: (route, result) {
+        appState.selectedBook = null;
+        notifyListeners();
+        return route.didPop(result);
+      },
+    );
+  }
+
+  @override
+  Future<void> setNewRoutePath(BookRoutePath configuration) async {
+    // This is not required for inner router delegate because it does not
+    // parse route
+    assert(false);
+  }
+
+  void _handleBookTapped(Book book) {
+    appState.selectedBook = book;
+    notifyListeners();
+  }
+}
+
+class FadeAnimationPage extends Page {
+  final Widget child;
+
+  const FadeAnimationPage({super.key, required this.child});
+
+  @override
+  Route createRoute(BuildContext context) {
+    return PageRouteBuilder(
+      settings: this,
+      pageBuilder: (context, animation, animation2) {
+        var curveTween = CurveTween(curve: Curves.easeIn);
+        return FadeTransition(
+          opacity: animation.drive(curveTween),
+          child: child,
+        );
+      },
+    );
+  }
+}
+
+// Screens
+class BooksListScreen extends StatelessWidget {
+  final List<Book> books;
+  final ValueChanged<Book> onTapped;
+
+  const BooksListScreen({
+    super.key,
+    required this.books,
+    required this.onTapped,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: ListView(
+        children: [
+          for (var book in books)
+            ListTile(
+              title: Text(book.title),
+              subtitle: Text(book.author),
+              onTap: () => onTapped(book),
+            )
+        ],
+      ),
+    );
+  }
+}
+
+class BookDetailsScreen extends StatelessWidget {
+  final Book? book;
+
+  const BookDetailsScreen({
+    super.key,
+    @required this.book,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Padding(
+        padding: const EdgeInsets.all(8.0),
         child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: const Text('Back'),
             ),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
+            if (book != null) ...[
+              Text(book!.title, style: Theme.of(context).textTheme.titleLarge),
+              Text(book!.author,
+                  style: Theme.of(context).textTheme.titleMedium),
+            ],
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+    );
+  }
+}
+
+class SettingsScreen extends StatelessWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Center(
+        child: Text('Settings screen'),
+      ),
     );
   }
 }
